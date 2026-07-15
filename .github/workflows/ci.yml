@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    name: Test and build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    env:
+      CLANG_MODULE_CACHE_PATH: ${{ github.workspace }}/.build/ModuleCache
+      SWIFTPM_MODULECACHE_OVERRIDE: ${{ github.workspace }}/.build/ModuleCache
+      XDG_CACHE_HOME: ${{ github.workspace }}/.build/cache
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Show Swift toolchain
+        run: swift --version
+
+      - name: Run tests
+        run: swift test --disable-sandbox
+
+      - name: Build release product
+        run: swift build --disable-sandbox --configuration release --product CronHarbor

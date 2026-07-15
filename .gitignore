@@ -1,0 +1,11 @@
+.DS_Store
+/.build/
+/dist/
+/.swiftpm/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.zip
+*.dmg
+*.log

@@ -1,0 +1,100 @@
+name: Release artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to package
+        required: true
+        default: main
+        type: string
+
+# This workflow only reads the repository and uploads workflow artifacts. It
+# deliberately produces an ad-hoc-signed release candidate: no Developer ID or
+# notarization claim is made unless a separate trusted release process supplies
+# and verifies those credentials.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-artifacts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package universal release candidate
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      CLANG_MODULE_CACHE_PATH: ${{ github.workspace }}/.build/ModuleCache
+      SWIFTPM_MODULECACHE_OVERRIDE: ${{ github.workspace }}/.build/ModuleCache
+      XDG_CACHE_HOME: ${{ github.workspace }}/.build/cache
+      CODESIGN_IDENTITY: "-"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Validate version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [[ -z "$version" ]]; then
+            echo "VERSION must not be empty" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match VERSION $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build universal app archive
+        run: ./script/package_release.sh
+
+      - name: Verify packaged app
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          app="dist/CronHarbor.app"
+          archive="dist/CronHarbor-$version.zip"
+          test -f "$archive"
+          plutil -lint "$app/Contents/Info.plist"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          lipo "$app/Contents/MacOS/CronHarbor" -verify_arch arm64 x86_64
+
+      - name: Create source archive and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          git archive \
+            --format=tar.gz \
+            --prefix="CronHarbor-$version/" \
+            --output="dist/CronHarbor-$version-source.tar.gz" \
+            HEAD
+          shasum -a 256 \
+            "dist/CronHarbor-$version.zip" \
+            "dist/CronHarbor-$version-source.tar.gz" \
+            > dist/SHA256SUMS
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: CronHarbor-${{ steps.version.outputs.version }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            dist/CronHarbor-${{ steps.version.outputs.version }}.zip
+            dist/CronHarbor-${{ steps.version.outputs.version }}-source.tar.gz
+            dist/SHA256SUMS
