@@ -1,128 +1,149 @@
 import SwiftUI
 
 struct JobEditorView: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var draft: JobDraft
+    @Binding private var draft: JobDraft
     @State private var preset: SchedulePreset
 
+    let onCancel: () -> Void
     let onSave: (JobDraft) -> Void
 
-    init(draft: JobDraft, onSave: @escaping (JobDraft) -> Void) {
-        _draft = State(initialValue: draft)
-        _preset = State(initialValue: SchedulePreset.detect(draft.expression))
+    init(
+        draft: Binding<JobDraft>,
+        onCancel: @escaping () -> Void,
+        onSave: @escaping (JobDraft) -> Void
+    ) {
+        _draft = draft
+        _preset = State(initialValue: SchedulePreset.detect(draft.wrappedValue.expression))
+        self.onCancel = onCancel
         self.onSave = onSave
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(draft.id == nil ? "New Cron Job" : "Edit Cron Job")
-                        .font(.title2.weight(.semibold))
-                    Text("Changes remain staged until you review and apply them.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .padding(22)
-
+            PanelPageHeader(
+                title: draft.id == nil ? "New Cron Job" : "Edit Cron Job",
+                subtitle: "Changes stay staged until you apply",
+                onBack: onCancel
+            )
             Divider()
 
-            Form {
-                Section("Job") {
-                    TextField("Name", text: $draft.name, prompt: Text("Nightly Backup"))
-                    Toggle("Enabled", isOn: $draft.isEnabled)
-                }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 15) {
+                    editorSection("JOB", symbol: "tag") {
+                        TextField("Name", text: $draft.name, prompt: Text("Nightly Backup"))
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("cronharbor.editor.name")
 
-                Section("Schedule") {
-                    Picker("Runs", selection: $preset) {
-                        ForEach(SchedulePreset.allCases) { preset in
-                            Text(preset.title).tag(preset)
+                        Toggle("Enabled", isOn: $draft.isEnabled)
+                            .toggleStyle(.switch)
+                    }
+
+                    editorSection("SCHEDULE", symbol: "calendar.badge.clock") {
+                        Picker("Runs", selection: $preset) {
+                            ForEach(SchedulePreset.allCases) { preset in
+                                Text(preset.title).tag(preset)
+                            }
                         }
-                    }
-                    .onChange(of: preset) { _, newValue in
-                        if let expression = newValue.expression {
-                            draft.expression = expression
+                        .onChange(of: preset) { _, newValue in
+                            if let expression = newValue.expression {
+                                draft.expression = expression
+                            }
                         }
-                    }
 
-                    TextField("Cron expression", text: $draft.expression)
-                        .font(.system(.body, design: .monospaced))
-                        .textFieldStyle(.roundedBorder)
+                        TextField("Cron expression", text: $draft.expression)
+                            .font(.system(.body, design: .monospaced))
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("cronharbor.editor.schedule")
+                            .onChange(of: draft.expression) { _, expression in
+                                let detected = SchedulePreset.detect(expression)
+                                if detected != preset { preset = detected }
+                            }
 
-                    HStack(spacing: 12) {
-                        FieldHint(value: "*", label: "minute")
-                        FieldHint(value: "*", label: "hour")
-                        FieldHint(value: "*", label: "day")
-                        FieldHint(value: "*", label: "month")
-                        FieldHint(value: "*", label: "weekday")
-                    }
+                        HStack(spacing: 5) {
+                            cronHint("min")
+                            cronHint("hour")
+                            cronHint("day")
+                            cronHint("month")
+                            cronHint("weekday")
+                        }
 
-                    Text(CronExpressionFormatter.describe(draft.expression))
-                        .font(.callout.weight(.medium))
+                        Label(
+                            CronExpressionFormatter.describe(draft.expression),
+                            systemImage: "clock"
+                        )
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(CronHarborStyle.accent)
 
-                    Toggle("Run only on AC power", isOn: $draft.requiresACPower)
-                        .help("Uses macOS cron's @AppleNotOnBattery qualifier.")
-                }
+                        Toggle("Run only on AC power", isOn: $draft.requiresACPower)
+                            .toggleStyle(.switch)
+                            .help("Uses macOS cron's @AppleNotOnBattery qualifier")
+                    }
 
-                Section("Command") {
-                    TextEditor(text: $draft.command)
-                        .font(.system(.body, design: .monospaced))
-                        .frame(minHeight: 88)
-                        .scrollContentBackground(.hidden)
-                        .padding(8)
-                        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+                    editorSection("COMMAND", symbol: "terminal") {
+                        TextEditor(text: $draft.command)
+                            .font(.system(.callout, design: .monospaced))
+                            .frame(height: 76)
+                            .scrollContentBackground(.hidden)
+                            .padding(7)
+                            .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+                            .accessibilityIdentifier("cronharbor.editor.command")
 
-                    Text("CronHarbor preserves shell syntax exactly. Run Now asks you to confirm the command and explains its cron-like execution context.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                        Text("Shell syntax is preserved exactly. Run Now always asks for confirmation.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
-                if let validationMessage = draft.validationMessage {
-                    Section {
+                    if let validationMessage = draft.validationMessage {
                         Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
                             .foregroundStyle(.red)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+                            .accessibilityIdentifier("cronharbor.editor.validation")
                     }
                 }
+                .padding(13)
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
 
             Divider()
-
             HStack {
-                Button("Cancel") { dismiss() }
+                Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button(draft.id == nil ? "Stage Job" : "Stage Changes") {
                     onSave(draft)
-                    dismiss()
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(draft.validationMessage != nil)
+                .accessibilityIdentifier("cronharbor.editor.stage")
             }
-            .padding(18)
+            .padding(12)
         }
-        .frame(width: 590, height: 620)
+        .accessibilityIdentifier("cronharbor.menu.editor")
     }
-}
 
-private struct FieldHint: View {
-    let value: String
-    let label: String
-
-    var body: some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.system(.caption, design: .monospaced).weight(.semibold))
-            Text(label)
-                .font(.caption2)
+    private func editorSection<Content: View>(
+        _ title: String,
+        symbol: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label(title, systemImage: symbol)
+                .font(.caption2.weight(.bold))
                 .foregroundStyle(.secondary)
+            content()
         }
-        .frame(maxWidth: .infinity)
+        .padding(11)
+        .background(.quaternary.opacity(0.38), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func cronHint(_ label: String) -> some View {
+        Text(label)
+            .font(.system(size: 9, weight: .medium, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
     }
 }
 

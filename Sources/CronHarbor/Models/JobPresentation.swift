@@ -107,14 +107,30 @@ struct JobDraft: Equatable, Sendable {
     }
 }
 
+struct JobDeletionSnapshot: Equatable, Sendable {
+    let name: String
+    let expression: String
+    let command: String
+    let isEnabled: Bool
+    let requiresACPower: Bool
+
+    init(job: JobPresentation) {
+        name = job.name
+        expression = job.expression
+        command = job.command
+        isEnabled = job.isEnabled
+        requiresACPower = job.requiresACPower
+    }
+}
+
 enum JobChange: Equatable, Sendable {
     case create(id: String, draft: JobDraft)
     case update(id: String, draft: JobDraft)
-    case delete(id: String)
+    case delete(id: String, snapshot: JobDeletionSnapshot)
 
     var targetID: String? {
         switch self {
-        case .create(let id, _), .update(let id, _), .delete(let id): id
+        case .create(let id, _), .update(let id, _), .delete(let id, _): id
         }
     }
 }

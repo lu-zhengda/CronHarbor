@@ -189,7 +189,7 @@ actor LiveCronService: CronServiceProtocol {
             return .create(coreDraft(from: draft))
         case .update(let id, let draft):
             return .update(id: CronJobID(rawValue: id), draft: coreDraft(from: draft))
-        case .delete(let id):
+        case .delete(let id, _):
             return .delete(id: CronJobID(rawValue: id))
         }
     }

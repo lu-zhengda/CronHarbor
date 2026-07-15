@@ -98,6 +98,112 @@ struct DashboardModelTests {
         #expect(model.lastError == "Apply or discard pending changes before refreshing. This keeps them based on the crontab you reviewed.")
     }
 
+    @Test("Discard restores the installed snapshot when reload fails")
+    func discardFailureDoesNotExposeProjectedJobsAsInstalled() async {
+        let original = Self.job()
+        let fake = AppFakeCronService(loadResult: Self.result(jobs: [original]))
+        let model = DashboardModel(service: fake)
+        await model.refresh()
+        var draft = JobDraft(job: original)
+        draft.name = "Projected Only"
+        draft.expression = "*/5 * * * *"
+        model.stage(draft)
+        await fake.setLoadError(FakeServiceError.conflict)
+
+        await model.discardPendingChanges()
+
+        #expect(model.pendingChanges.isEmpty)
+        #expect(model.jobs == [original])
+        #expect(model.lastError == FakeServiceError.conflict.localizedDescription)
+    }
+
+    @Test("Upcoming installed job ignores a staged pause projection")
+    func installedUpcomingRunRemainsAuthoritativeWhileStaged() async {
+        let original = Self.job()
+        let fake = AppFakeCronService(loadResult: Self.result(jobs: [original]))
+        let model = DashboardModel(service: fake)
+        await model.refresh()
+
+        model.stageToggle(original)
+
+        #expect(model.nextJobs.isEmpty)
+        #expect(model.installedNextJobs.map(\.id) == [original.id])
+    }
+
+    @Test("Creating and cancelling is a pure editor state transition")
+    func createCancelDoesNotMutateJobs() async {
+        let original = Self.job()
+        let fake = AppFakeCronService(loadResult: Self.result(jobs: [original]))
+        let model = DashboardModel(service: fake)
+        await model.refresh()
+
+        model.beginCreatingJob()
+        model.editorDraft?.name = "Unstaged scratch"
+        model.editorDraft?.command = "/bin/echo scratch"
+
+        #expect(model.isEditorPresented)
+        #expect(model.jobs == [original])
+        #expect(model.pendingChanges.isEmpty)
+
+        model.cancelEditing()
+
+        #expect(!model.isEditorPresented)
+        #expect(model.editorDraft == nil)
+        #expect(model.jobs == [original])
+        #expect(model.pendingChanges.isEmpty)
+    }
+
+    @Test("Cancelling an edit leaves the source presentation unchanged")
+    func editCancelDoesNotMutateJob() async {
+        let original = Self.job()
+        let fake = AppFakeCronService(loadResult: Self.result(jobs: [original]))
+        let model = DashboardModel(service: fake)
+        await model.refresh()
+
+        model.beginEditing(original)
+        model.editorDraft?.name = "Never staged"
+        model.editorDraft?.expression = "*/5 * * * *"
+        model.cancelEditing()
+
+        #expect(model.jobs == [original])
+        #expect(model.pendingChanges.isEmpty)
+    }
+
+    @Test("Refresh does not overwrite a model-backed editor draft")
+    func refreshPreservesEditorSession() async {
+        let original = Self.job()
+        let fake = AppFakeCronService(loadResult: Self.result(jobs: [original]))
+        let model = DashboardModel(service: fake)
+        await model.refresh()
+        model.beginEditing(original)
+        model.editorDraft?.name = "Work in progress"
+        await fake.setLoadResult(Self.result(jobs: [Self.job(name: "External Name")], revision: "r2"))
+
+        await model.refresh()
+
+        #expect(model.editorDraft?.name == "Work in progress")
+        #expect(model.jobs == [original])
+        #expect(model.pendingChanges.isEmpty)
+    }
+
+    @Test("Deleting an updated job reviews the installed target snapshot")
+    func updateThenDeleteRetainsInstalledSnapshot() async throws {
+        let original = Self.job()
+        let fake = AppFakeCronService(loadResult: Self.result(jobs: [original]))
+        let model = DashboardModel(service: fake)
+        await model.refresh()
+
+        var draft = JobDraft(job: original)
+        draft.name = "Renamed Before Delete"
+        model.stage(draft)
+        model.stageDelete(try #require(model.jobs.first))
+
+        #expect(model.pendingChanges == [
+            .delete(id: original.id, snapshot: JobDeletionSnapshot(job: original))
+        ])
+        #expect(model.jobs.isEmpty)
+    }
+
     @Test("A pending create can be edited, toggled, and deleted before apply")
     func pendingCreateReducesLocally() async throws {
         let fake = AppFakeCronService(loadResult: Self.result(jobs: []))
@@ -281,6 +387,7 @@ private actor AppFakeCronService: CronServiceProtocol {
     }
 
     private var loadResult: CronLoadResult
+    private var loadError: (any Error & Sendable)?
     private var applyResult: CronLoadResult
     private var applyError: (any Error & Sendable)?
     private var applyCalls: [ApplyCall] = []
@@ -291,7 +398,10 @@ private actor AppFakeCronService: CronServiceProtocol {
         self.applyResult = loadResult
     }
 
-    func load() async throws -> CronLoadResult { loadResult }
+    func load() async throws -> CronLoadResult {
+        if let loadError { throw loadError }
+        return loadResult
+    }
 
     func apply(changes: [JobChange], basedOn revision: String) async throws -> CronLoadResult {
         applyCalls.append(ApplyCall(changes: changes, revision: revision))
@@ -320,6 +430,10 @@ private actor AppFakeCronService: CronServiceProtocol {
 
     func setLoadResult(_ result: CronLoadResult) {
         loadResult = result
+    }
+
+    func setLoadError(_ error: any Error & Sendable) {
+        loadError = error
     }
 
     func setApplyError(_ error: any Error & Sendable) {

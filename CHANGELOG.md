@@ -4,6 +4,26 @@ All notable changes to CronHarbor are documented here. The project follows [Keep
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-15
+
+### Changed
+
+- Rebuilt CronHarbor as a true menu-bar-first app with no dashboard window at launch.
+- Moved job search, status filters, upcoming-run summary, job details, editing, staged-change review, and Run Now history into one compact panel.
+- Replaced modal editing with an inline, model-backed editor that preserves in-progress typing when the menu closes.
+- Added persistent staged-only warnings and a dedicated review screen with exact commands and installed delete-target details.
+- Kept the prominent upcoming-run summary anchored to the installed crontab while edits are staged.
+- Kept Settings as the only deliberate secondary window.
+
+### Removed
+
+- Removed the three-column dashboard and its launcher-style menu popover.
+
+### Tests
+
+- Added editor lifecycle, installed delete-target snapshot, and discard-failure coverage.
+- Added a release guard that rejects normal SwiftUI window scenes and verifies `LSUIElement` remains enabled.
+
 ## [0.1.0] - 2026-07-14
 
 ### Added

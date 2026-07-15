@@ -1,4 +1,3 @@
-import AppKit
 import Combine
 import CronHarborCore
 import Foundation
@@ -17,10 +16,11 @@ final class DashboardModel: ObservableObject {
     @Published var lastError: String?
     @Published var diagnostics: [String] = []
     @Published var editorDraft: JobDraft?
-    @Published var isEditorPresented = false
 
     private let service: any CronServiceProtocol
     private var revision = ""
+    private var installedJobsSnapshot: [JobPresentation] = []
+    private var installedJobsByID: [String: JobPresentation] = [:]
 
     init(service: any CronServiceProtocol) {
         self.service = service
@@ -38,9 +38,9 @@ final class DashboardModel: ObservableObject {
 
     var menuBarSymbol: String {
         if lastError != nil || jobs.contains(where: { $0.health == .warning }) {
-            return "exclamationmark.anchor"
+            return "exclamationmark.triangle"
         }
-        return runningJobID == nil ? "anchor.circle" : "arrow.trianglehead.2.clockwise.rotate.90.circle.fill"
+        return runningJobID == nil ? "calendar.badge.clock" : "arrow.triangle.2.circlepath"
     }
 
     var filteredJobs: [JobPresentation] {
@@ -83,12 +83,19 @@ final class DashboardModel: ObservableObject {
         upcomingJobs(after: .now)
     }
 
+    var installedNextJobs: [JobPresentation] {
+        upcomingInstalledJobs(after: .now)
+    }
+
+    var hasInstalledJobs: Bool { !installedJobsSnapshot.isEmpty }
+
     var attentionCount: Int { jobs.count(where: { $0.diagnostic != nil }) }
     var healthSummary: String {
         attentionCount == 0 ? "\(activeJobs.count) active · All clear" : "\(attentionCount) need attention"
     }
 
     var isSourceBusy: Bool { isLoading || isApplying }
+    var isEditorPresented: Bool { editorDraft != nil }
 
     func hasPendingChange(for job: JobPresentation) -> Bool {
         pendingChanges.contains { $0.targetID == job.id }
@@ -132,6 +139,27 @@ final class DashboardModel: ObservableObject {
             .sorted { ($0.nextRun ?? .distantFuture) < ($1.nextRun ?? .distantFuture) }
     }
 
+    func upcomingInstalledJobs(after now: Date) -> [JobPresentation] {
+        installedJobsSnapshot
+            .compactMap { installedJob -> JobPresentation? in
+                guard installedJob.isEnabled, installedJob.diagnostic == nil else {
+                    return nil
+                }
+                var presentation = installedJob
+                if presentation.nextRun.map({ $0 <= now }) ?? true {
+                    presentation.nextRun = calculatedNextRun(
+                        for: presentation.expression,
+                        after: now
+                    )
+                }
+                guard let nextRun = presentation.nextRun, nextRun > now else {
+                    return nil
+                }
+                return presentation
+            }
+            .sorted { ($0.nextRun ?? .distantFuture) < ($1.nextRun ?? .distantFuture) }
+    }
+
     func refresh() async {
         guard !isLoading else { return }
         guard !isApplying else {
@@ -148,6 +176,7 @@ final class DashboardModel: ObservableObject {
         do {
             let result = try await service.load()
             jobs = result.jobs
+            rememberInstalledJobs(result.jobs)
             revision = result.revision
             diagnostics = result.diagnostics
             runHistory = result.runHistory
@@ -163,19 +192,19 @@ final class DashboardModel: ObservableObject {
     func beginCreatingJob() {
         guard !isSourceBusy else { return }
         editorDraft = JobDraft()
-        isEditorPresented = true
-        openDashboard()
     }
 
     func beginEditing(_ job: JobPresentation) {
         guard !isSourceBusy, job.diagnostic == nil else { return }
         editorDraft = JobDraft(job: job)
-        isEditorPresented = true
     }
 
-    func stage(_ draft: JobDraft) {
-        guard !isSourceBusy else { return }
+    @discardableResult
+    func stage(_ draft: JobDraft) -> String? {
+        guard !isSourceBusy else { return nil }
+        let stagedID: String
         if let id = draft.id {
+            stagedID = id
             if let pendingCreateIndex = pendingChanges.firstIndex(where: { change in
                 guard case .create(let pendingID, _) = change else { return false }
                 return pendingID == id
@@ -195,6 +224,7 @@ final class DashboardModel: ObservableObject {
             }
         } else {
             let temporaryID = "cronharbor-pending:\(UUID().uuidString)"
+            stagedID = temporaryID
             var identifiedDraft = draft
             identifiedDraft.id = temporaryID
             pendingChanges.append(.create(id: temporaryID, draft: identifiedDraft))
@@ -213,7 +243,12 @@ final class DashboardModel: ObservableObject {
             )
             selectedJobID = temporaryID
         }
-        isEditorPresented = false
+        editorDraft = nil
+        return stagedID
+    }
+
+    func cancelEditing() {
+        guard !isApplying else { return }
         editorDraft = nil
     }
 
@@ -236,7 +271,10 @@ final class DashboardModel: ObservableObject {
             return
         }
         pendingChanges.removeAll { $0.targetID == job.id }
-        pendingChanges.append(.delete(id: job.id))
+        let installedJob = installedJobsByID[job.id] ?? job
+        pendingChanges.append(
+            .delete(id: job.id, snapshot: JobDeletionSnapshot(job: installedJob))
+        )
         jobs.removeAll { $0.id == job.id }
         selectedJobID = filteredJobs.first?.id
     }
@@ -244,6 +282,11 @@ final class DashboardModel: ObservableObject {
     func discardPendingChanges() async {
         guard !isSourceBusy else { return }
         pendingChanges.removeAll()
+        jobs = installedJobsSnapshot
+        refreshUpcomingRuns()
+        if selectedJobID == nil || !jobs.contains(where: { $0.id == selectedJobID }) {
+            selectedJobID = filteredJobs.first?.id
+        }
         await refresh()
     }
 
@@ -260,6 +303,7 @@ final class DashboardModel: ObservableObject {
                 return
             }
             jobs = result.jobs
+            rememberInstalledJobs(result.jobs)
             revision = result.revision
             diagnostics = result.diagnostics
             runHistory = result.runHistory
@@ -293,13 +337,6 @@ final class DashboardModel: ObservableObject {
         }
     }
 
-    func openDashboard() {
-        NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApp.windows.first(where: { $0.title == "CronHarbor" }) {
-            window.makeKeyAndOrderFront(nil)
-        }
-    }
-
     private func calculatedNextRun(
         for expression: String,
         after date: Date = .now
@@ -326,5 +363,13 @@ final class DashboardModel: ObservableObject {
         }
 
         return CronNextRunCalculator().nextRun(for: schedule, after: date)
+    }
+
+    private func rememberInstalledJobs(_ jobs: [JobPresentation]) {
+        installedJobsSnapshot = jobs
+        installedJobsByID = Dictionary(
+            jobs.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 }

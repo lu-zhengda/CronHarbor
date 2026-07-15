@@ -3,9 +3,7 @@ import SwiftUI
 
 struct MenuBarPopoverView: View {
     @EnvironmentObject private var model: DashboardModel
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
-    @State private var pendingRunJob: JobPresentation?
+    @State private var page: MenuBarPage = .jobs
     private let upcomingRunTimer = Timer.publish(
         every: 60,
         on: .main,
@@ -13,206 +11,171 @@ struct MenuBarPopoverView: View {
     ).autoconnect()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-
-            Divider()
-
-            if let nextJob = model.nextJobs.first {
-                nextJobCard(nextJob)
-            } else {
-                noJobsCard
+        Group {
+            switch page {
+            case .jobs:
+                MenuBarJobsView(
+                    onSelectJob: showJob,
+                    onCreateJob: createJob,
+                    onReviewChanges: { page = .changes },
+                    onShowHistory: { page = .history }
+                )
+            case .job(let id):
+                if let job = model.jobs.first(where: { $0.id == id }) {
+                    MenuBarJobDetailView(
+                        job: job,
+                        onBack: { page = .jobs },
+                        onEdit: { editJob(job) },
+                        onReviewChanges: { page = .changes }
+                    )
+                } else {
+                    MenuMissingJobView { page = .jobs }
+                }
+            case .editor(let returnJobID):
+                if model.editorDraft != nil {
+                    JobEditorView(
+                        draft: editorDraftBinding,
+                        onCancel: {
+                            model.cancelEditing()
+                            returnFromEditor(to: returnJobID)
+                        },
+                        onSave: { draft in
+                            let jobID = model.stage(draft)
+                            if let jobID {
+                                page = .job(jobID)
+                            } else {
+                                page = .jobs
+                            }
+                        }
+                    )
+                } else {
+                    MenuMissingJobView { page = .jobs }
+                }
+            case .changes:
+                PendingChangesReviewView { page = .jobs }
+            case .history:
+                MenuBarHistoryView { page = .jobs }
             }
-
-            Divider()
-
-            VStack(spacing: 2) {
-                MenuActionRow(title: "Open CronHarbor", symbol: "macwindow", shortcut: nil) {
-                    showDashboard()
-                }
-                MenuActionRow(
-                    title: "New Job",
-                    symbol: "plus",
-                    shortcut: "⌘N",
-                    isDisabled: model.isSourceBusy
-                ) {
-                    showDashboard()
-                    model.beginCreatingJob()
-                }
-                MenuActionRow(
-                    title: "Refresh",
-                    symbol: "arrow.clockwise",
-                    shortcut: "⌘R",
-                    isDisabled: model.isSourceBusy || !model.pendingChanges.isEmpty
-                ) {
-                    Task { await model.refresh() }
-                }
-                MenuActionRow(title: "Settings", symbol: "gearshape", shortcut: "⌘,") {
-                    openSettings()
-                    NSApp.activate(ignoringOtherApps: true)
-                }
-            }
-            .padding(8)
-
-            Divider()
-
-            HStack {
-                Text("CronHarbor runs locally")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Quit") { NSApp.terminate(nil) }
-                    .buttonStyle(.borderless)
-                    .font(.caption)
-            }
-            .padding(12)
         }
-        .frame(width: 370)
-        .background(.regularMaterial)
+        .frame(width: 430, height: 620)
+        .background(Color(nsColor: .windowBackgroundColor))
         .task {
-            if model.jobs.isEmpty { await model.refresh() }
+            if model.jobs.isEmpty, model.pendingChanges.isEmpty {
+                await model.refresh()
+            }
             model.refreshUpcomingRuns()
+            if let draft = model.editorDraft {
+                page = .editor(returnJobID: draft.id)
+            }
         }
         .onReceive(upcomingRunTimer) { now in
             model.refreshUpcomingRuns(at: now)
         }
-        .confirmationDialog(
-            pendingRunJob.map { "Run “\($0.name)” now?" } ?? "Run this job now?",
+        .onChange(of: model.jobs.map(\.id)) { _, ids in
+            guard case .job(let id) = page, !ids.contains(id) else { return }
+            page = .jobs
+        }
+        .alert(
+            "CronHarbor needs attention",
             isPresented: Binding(
-                get: { pendingRunJob != nil },
-                set: { if !$0 { pendingRunJob = nil } }
-            ),
-            titleVisibility: .visible
+                get: { model.lastError != nil },
+                set: { if !$0 { model.lastError = nil } }
+            )
         ) {
-            if let job = pendingRunJob {
-                Button("Run Now") {
-                    pendingRunJob = nil
-                    Task { await model.runNow(job) }
-                }
-            }
-            Button("Cancel", role: .cancel) { pendingRunJob = nil }
+            Button("OK") { model.lastError = nil }
         } message: {
-            if let job = pendingRunJob {
-                Text(job.runConfirmationMessage)
-            }
+            Text(model.lastError ?? "Unknown error")
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "anchor.circle.fill")
-                .font(.title)
-                .foregroundStyle(CronHarborStyle.accent)
+    private var editorDraftBinding: Binding<JobDraft> {
+        Binding(
+            get: { model.editorDraft ?? JobDraft() },
+            set: { model.editorDraft = $0 }
+        )
+    }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("CronHarbor")
-                    .font(.headline)
-                Text(model.healthSummary)
-                    .font(.caption)
-                    .foregroundStyle(model.attentionCount == 0 ? CronHarborStyle.success : .red)
-            }
+    private func showJob(_ job: JobPresentation) {
+        model.selectedJobID = job.id
+        page = .job(job.id)
+    }
 
-            Spacer()
+    private func createJob() {
+        model.beginCreatingJob()
+        guard model.editorDraft != nil else { return }
+        page = .editor(returnJobID: nil)
+    }
 
-            if model.isLoading {
-                ProgressView()
-                    .controlSize(.small)
-            } else {
-                Image(systemName: model.attentionCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(model.attentionCount == 0 ? CronHarborStyle.success : .red)
-            }
+    private func editJob(_ job: JobPresentation) {
+        model.beginEditing(job)
+        guard model.editorDraft != nil else { return }
+        page = .editor(returnJobID: job.id)
+    }
+
+    private func returnFromEditor(to jobID: String?) {
+        if let jobID, model.jobs.contains(where: { $0.id == jobID }) {
+            page = .job(jobID)
+        } else {
+            page = .jobs
         }
-        .padding(16)
     }
-
-    private func nextJobCard(_ job: JobPresentation) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("NEXT JOB")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 12) {
-                Image(systemName: "clock.fill")
-                    .font(.title2)
-                    .foregroundStyle(CronHarborStyle.accent)
-                    .frame(width: 34, height: 34)
-                    .background(CronHarborStyle.accent.opacity(0.12), in: Circle())
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(job.name)
-                        .font(.body.weight(.semibold))
-                        .lineLimit(1)
-                    if let nextRun = job.nextRun {
-                        Text(nextRun, style: .relative)
-                            .font(.callout)
-                        Text(nextRun, format: .dateTime.weekday(.abbreviated).hour().minute())
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Spacer()
-
-                Button {
-                    pendingRunJob = job
-                } label: {
-                    Image(systemName: model.runningJobID == job.id ? "hourglass" : "play.fill")
-                }
-                .buttonStyle(.bordered)
-                .disabled(
-                    model.isSourceBusy
-                        || model.runningJobID != nil
-                        || model.hasPendingChange(for: job)
-                )
-                .help(model.hasPendingChange(for: job) ? "Apply or discard this job’s pending changes first" : "Run now")
-            }
-        }
-        .padding(16)
-    }
-
-    private var noJobsCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("No upcoming jobs", systemImage: "moon.stars")
-                .font(.body.weight(.medium))
-            Text(model.jobs.isEmpty ? "Create your first user cron job." : "Enable a job to see its next run here.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-    }
-
-    private func showDashboard() {
-        openWindow(id: "dashboard")
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
 }
 
-private struct MenuActionRow: View {
+private enum MenuBarPage: Equatable {
+    case jobs
+    case job(String)
+    case editor(returnJobID: String?)
+    case changes
+    case history
+}
+
+struct PanelPageHeader: View {
     let title: String
-    let symbol: String
-    let shortcut: String?
-    var isDisabled = false
-    let action: () -> Void
+    let subtitle: String?
+    let onBack: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: symbol)
-                    .frame(width: 18)
+        HStack(spacing: 10) {
+            Button(action: onBack) {
+                Image(systemName: "chevron.left")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 28, height: 28)
+                    .background(.quaternary.opacity(0.65), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back")
+
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                Spacer()
-                if let shortcut {
-                    Text(shortcut)
-                        .foregroundStyle(.tertiary)
+                    .font(.headline)
+                    .lineLimit(1)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
+            Spacer()
         }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
+        .padding(.horizontal, 13)
+        .frame(height: 56)
+    }
+}
+
+private struct MenuMissingJobView: View {
+    let onBack: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            Image(systemName: "questionmark.folder")
+                .font(.system(size: 34))
+                .foregroundStyle(.secondary)
+            Text("This job is no longer available")
+                .font(.headline)
+            Button("Back to Jobs", action: onBack)
+            Spacer()
+        }
     }
 }

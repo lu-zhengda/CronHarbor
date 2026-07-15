@@ -70,6 +70,7 @@ jobs:
           archive="dist/CronHarbor-$version.zip"
           test -f "$archive"
           plutil -lint "$app/Contents/Info.plist"
+          test "$(plutil -extract LSUIElement raw "$app/Contents/Info.plist")" = "true"
           codesign --verify --deep --strict --verbose=2 "$app"
           lipo "$app/Contents/MacOS/CronHarbor" -verify_arch arm64 x86_64
 

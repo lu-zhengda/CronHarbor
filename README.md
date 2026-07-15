@@ -8,13 +8,12 @@
   A native macOS menu bar app for seeing, editing, pausing, and safely running your user cron jobs.
 </p>
 
-CronHarbor gives classic `cron` a clear Mac interface without replacing it or hiding what is installed. It reads the signed-in user's crontab through `/usr/bin/crontab`, keeps edits staged until review, and preserves source it cannot safely understand.
-
-![CronHarbor dashboard and menu bar design direction](docs/design/cronharbor-ux-concept.png)
+CronHarbor gives classic `cron` a clear Mac interface without replacing it or hiding what is installed. The complete workflow lives in a compact menu bar panel: browse jobs, inspect schedules, edit, review staged changes, and check **Run Now** history without opening a dashboard. It reads the signed-in user's crontab through `/usr/bin/crontab` and preserves source it cannot safely understand.
 
 ## Highlights
 
-- Native SwiftUI dashboard plus a compact menu bar view
+- True menu-bar-first SwiftUI app with no main window or Dock icon
+- Compact inline job list, detail, editor, staged-change review, and run history
 - Search and filters for active, paused, and attention-needed jobs
 - Friendly presets with exact five-field expressions and supported `@shortcuts`
 - Local next-run estimates, including standard day-of-month/day-of-week cron semantics
@@ -51,7 +50,7 @@ swift test
 ./script/build_and_run.sh
 ```
 
-The script builds `dist/CronHarbor.app`, signs it ad hoc for local development, and launches it. The app has no Dock icon by design; use its menu bar anchor or the dashboard window.
+The script builds `dist/CronHarbor.app`, signs it ad hoc for local development, and launches it. The app has no Dock icon or main window by design; use its menu bar anchor. Settings opens a separate window only when requested.
 
 To produce a universal release candidate:
 

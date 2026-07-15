@@ -41,6 +41,9 @@ jobs:
       - name: Show Swift toolchain
         run: swift --version
 
+      - name: Verify menu-bar-only architecture
+        run: ./script/verify_menu_bar_architecture.sh
+
       - name: Run tests
         run: swift test --disable-sandbox
 
