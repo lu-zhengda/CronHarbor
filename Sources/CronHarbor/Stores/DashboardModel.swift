@@ -199,6 +199,14 @@ final class DashboardModel: ObservableObject {
         editorDraft = JobDraft(job: job)
     }
 
+    func beginDuplicating(_ job: JobPresentation) {
+        guard !isSourceBusy, job.diagnostic == nil else { return }
+        var draft = JobDraft(job: job)
+        draft.id = nil
+        draft.name = "\(job.name) Copy"
+        editorDraft = draft
+    }
+
     @discardableResult
     func stage(_ draft: JobDraft) -> String? {
         guard !isSourceBusy else { return nil }
@@ -337,32 +345,83 @@ final class DashboardModel: ObservableObject {
         }
     }
 
+    func clearRunHistory() async {
+        guard !isSourceBusy else { return }
+        do {
+            try await service.clearRunHistory()
+            runHistory = []
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Backups
+
+    @Published var backups: [CrontabBackupInfo] = []
+
+    func reloadBackups() {
+        let fileManager = FileManager.default
+        let urls = (try? fileManager.contentsOfDirectory(
+            at: AppSupportPaths.backupsDirectory,
+            includingPropertiesForKeys: [.creationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        backups = urls
+            .filter { $0.pathExtension == "backup" }
+            .compactMap { url -> CrontabBackupInfo? in
+                guard let values = try? url.resourceValues(forKeys: [.creationDateKey, .fileSizeKey]),
+                      let createdAt = values.creationDate
+                else {
+                    return nil
+                }
+                return CrontabBackupInfo(
+                    url: url,
+                    createdAt: createdAt,
+                    sizeInBytes: values.fileSize ?? 0
+                )
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func restoreBackup(_ backup: CrontabBackupInfo) async {
+        guard !isSourceBusy, runningJobID == nil else { return }
+        guard pendingChanges.isEmpty else {
+            lastError = "Apply or discard pending changes before restoring a backup."
+            return
+        }
+        isApplying = true
+        defer { isApplying = false }
+        do {
+            let result = try await service.restoreBackup(from: backup.url)
+            jobs = result.jobs
+            rememberInstalledJobs(result.jobs)
+            revision = result.revision
+            diagnostics = result.diagnostics
+            runHistory = result.runHistory
+            lastError = nil
+            selectedJobID = jobs.contains(where: { $0.id == selectedJobID }) ? selectedJobID : jobs.first?.id
+            reloadBackups()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func pruneBackups(keepingLatest keepCount: Int) {
+        reloadBackups()
+        guard backups.count > keepCount else { return }
+        let fileManager = FileManager.default
+        for backup in backups.dropFirst(keepCount) {
+            try? fileManager.removeItem(at: backup.url)
+        }
+        reloadBackups()
+    }
+
     private func calculatedNextRun(
         for expression: String,
         after date: Date = .now
     ) -> Date? {
-        let normalized = expression.trimmingCharacters(in: .whitespacesAndNewlines)
-        let schedule: CronSchedule
-
-        if let macro = CronMacro(rawValue: normalized) {
-            schedule = .macro(macro)
-        } else {
-            let parts = normalized.split(whereSeparator: \Character.isWhitespace).map(String.init)
-            guard parts.count == 5,
-                  let fields = try? CronFields(
-                    minute: parts[0],
-                    hour: parts[1],
-                    dayOfMonth: parts[2],
-                    month: parts[3],
-                    dayOfWeek: parts[4]
-                  )
-            else {
-                return nil
-            }
-            schedule = .fields(fields)
-        }
-
-        return CronNextRunCalculator().nextRun(for: schedule, after: date)
+        ScheduleExpression.nextRun(for: expression, after: date)
     }
 
     private func rememberInstalledJobs(_ jobs: [JobPresentation]) {

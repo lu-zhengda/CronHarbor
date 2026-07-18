@@ -99,11 +99,35 @@ struct JobDraft: Equatable, Sendable {
                     month: parts[3],
                     dayOfWeek: parts[4]
                 )
+            } catch let error as CronValidationError {
+                return Self.message(for: error)
             } catch {
                 return "One or more cron fields contain an invalid value, range, or step."
             }
         }
         return nil
+    }
+
+    private static func message(for error: CronValidationError) -> String {
+        let fieldName: String = switch error.field {
+        case .minute: "minute"
+        case .hour: "hour"
+        case .dayOfMonth: "day-of-month"
+        case .month: "month"
+        case .dayOfWeek: "weekday"
+        }
+        let range = error.field.allowedRange
+        let problem: String = switch error.reason {
+        case .emptyExpression: "is empty"
+        case .emptyListItem: "has an empty list item"
+        case .malformedStep, .invalidStep: "has an invalid step — use a form like */5"
+        case .malformedRange: "has an invalid range — use a form like 1-5"
+        case .reversedRange: "has a reversed range ('\(error.fragment)')"
+        case .invalidValue: "contains an unrecognized value ('\(error.fragment)')"
+        case .valueOutOfRange:
+            "has a value outside \(range.lowerBound)–\(range.upperBound) ('\(error.fragment)')"
+        }
+        return "The \(fieldName) field \(problem)."
     }
 }
 
@@ -159,4 +183,34 @@ protocol CronServiceProtocol: Sendable {
     func load() async throws -> CronLoadResult
     func apply(changes: [JobChange], basedOn revision: String) async throws -> CronLoadResult
     func run(job: JobPresentation) async throws -> RunRecord
+    func clearRunHistory() async throws
+    func restoreBackup(from url: URL) async throws -> CronLoadResult
+}
+
+/// Default implementations keep lightweight service doubles source-compatible
+/// while the live service opts into the full capability set.
+extension CronServiceProtocol {
+    func clearRunHistory() async throws {
+        throw CronServiceCapabilityError.unsupported
+    }
+
+    func restoreBackup(from url: URL) async throws -> CronLoadResult {
+        throw CronServiceCapabilityError.unsupported
+    }
+}
+
+enum CronServiceCapabilityError: LocalizedError, Sendable {
+    case unsupported
+
+    var errorDescription: String? {
+        "This action is not available right now."
+    }
+}
+
+struct CrontabBackupInfo: Identifiable, Hashable, Sendable {
+    let url: URL
+    let createdAt: Date
+    let sizeInBytes: Int
+
+    var id: URL { url }
 }

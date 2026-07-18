@@ -9,22 +9,13 @@ actor LiveCronService: CronServiceProtocol {
     private let nextRunCalculator: CronNextRunCalculator
 
     init() {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support", isDirectory: true)
-        let cronHarborDirectory = appSupport.appendingPathComponent("CronHarbor", isDirectory: true)
-
         repository = CrontabRepository(
             client: SystemCrontabClient(),
-            backupDirectoryURL: cronHarborDirectory.appendingPathComponent("Backups", isDirectory: true)
+            backupDirectoryURL: AppSupportPaths.backupsDirectory
         )
         runExecutor = RunNowExecutor()
         invocationBuilder = CronRunInvocationBuilder()
-        historyStore = RunHistoryStore(
-            fileURL: cronHarborDirectory.appendingPathComponent("run-history.json")
-        )
+        historyStore = RunHistoryStore(fileURL: AppSupportPaths.runHistoryFile)
         nextRunCalculator = CronNextRunCalculator()
     }
 
@@ -114,6 +105,41 @@ actor LiveCronService: CronServiceProtocol {
             throw error
         } catch {
             throw LiveCronServiceError.runFailed(Self.message(for: error))
+        }
+    }
+
+    func clearRunHistory() async throws {
+        try await historyStore.clear()
+    }
+
+    /// Restores a private backup through the same digest-checked install path
+    /// as a normal apply, so the current crontab is itself backed up first and
+    /// the write is refused if the source changes mid-flight.
+    func restoreBackup(from url: URL) async throws -> CronLoadResult {
+        let backupContents: Data
+        do {
+            backupContents = try Data(contentsOf: url)
+        } catch {
+            throw LiveCronServiceError.backupUnreadable(url)
+        }
+
+        do {
+            let snapshot = try await repository.read()
+            let receipt = try await repository.install(
+                contents: backupContents,
+                expectedDigest: snapshot.digest
+            )
+            return await makeResult(from: receipt.snapshot)
+        } catch CrontabRepositoryError.conflict {
+            throw LiveCronServiceError.externalConflict
+        } catch CrontabRepositoryError.installedStateUnknown(let backupURL) {
+            throw LiveCronServiceError.installedStateUnknown(backupURL)
+        } catch CrontabRepositoryError.readbackMismatch(_, _, let backupURL) {
+            throw LiveCronServiceError.readbackMismatch(backupURL)
+        } catch let error as LiveCronServiceError {
+            throw error
+        } catch {
+            throw LiveCronServiceError.restoreFailed(Self.message(for: error))
         }
     }
 
@@ -258,6 +284,8 @@ private enum LiveCronServiceError: LocalizedError, Sendable {
     case readFailed(String)
     case applyFailed(String)
     case runFailed(String)
+    case backupUnreadable(URL)
+    case restoreFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -279,6 +307,10 @@ private enum LiveCronServiceError: LocalizedError, Sendable {
             "CronHarbor could not complete the apply: \(message). Pending changes remain staged; discard them before refreshing the installed state."
         case .runFailed(let message):
             "The job could not be started: \(message)"
+        case .backupUnreadable(let url):
+            "CronHarbor could not read the backup at \(url.path). Nothing was changed."
+        case .restoreFailed(let message):
+            "CronHarbor could not restore the backup: \(message). Refresh to inspect the installed crontab."
         }
     }
 }

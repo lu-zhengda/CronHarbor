@@ -4,6 +4,27 @@ All notable changes to CronHarbor are documented here. The project follows [Keep
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-18
+
+### Added
+
+- Backups browser in Settings: list every private crontab backup with its date and size, reveal the folder in Finder, restore a backup through the same digest-checked install path as a normal apply (the current crontab is backed up first), and prune old backups while keeping the newest 20.
+- Launch-at-login toggle in Settings using `SMAppService`, with graceful reporting when macOS declines the change.
+- Live "next occurrences" preview in the job editor: the next three run times update as the schedule expression is typed.
+- Upcoming-runs card in job detail now lists the next three occurrences instead of one.
+- Duplicate action in job detail that opens a prefilled new-job draft.
+- Run history gained a failures-only filter and a confirmed Clear History action.
+
+### Changed
+
+- Schedule descriptions now cover many more expressions — minute/hour steps, hour stop lists, weekday and weekend sets, day-of-month lists, month sets, and multiple daily times — with locale-aware time formatting. Expressions that cannot be described confidently (including schedules where cron ORs restricted day-of-month and day-of-week fields) still fall back to the raw source rather than risking a wrong paraphrase.
+- Schedule validation errors now name the failing cron field and the reason, such as an out-of-range value or a malformed step, instead of one generic message.
+
+### Tests
+
+- Added formatter coverage for interval, clock-time, weekday, day-of-month, month, macro, and fallback descriptions.
+- Added model coverage for duplicate drafts, clearing run history, and backup restore (including the staged-changes guard).
+
 ## [0.2.0] - 2026-07-15
 
 ### Changed

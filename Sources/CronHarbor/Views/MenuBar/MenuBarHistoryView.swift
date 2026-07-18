@@ -4,6 +4,12 @@ import SwiftUI
 struct MenuBarHistoryView: View {
     @EnvironmentObject private var model: DashboardModel
     let onBack: () -> Void
+    @State private var showsFailuresOnly = false
+    @State private var confirmsClear = false
+
+    private var visibleRecords: [RunRecord] {
+        showsFailuresOnly ? model.runHistory.filter { !$0.succeeded } : model.runHistory
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,23 +20,38 @@ struct MenuBarHistoryView: View {
             )
             Divider()
 
-            if model.runHistory.isEmpty {
-                VStack(spacing: 9) {
-                    Spacer()
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 32))
-                        .foregroundStyle(.secondary)
-                    Text("No CronHarbor runs yet")
-                        .font(.headline)
-                    Text("Scheduled cron executions are not tracked.")
+            if !model.runHistory.isEmpty {
+                HStack(spacing: 8) {
+                    Toggle("Failures only", isOn: $showsFailuresOnly)
+                        .toggleStyle(.checkbox)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
                     Spacer()
+                    Button("Clear History") {
+                        confirmsClear = true
+                    }
+                    .controlSize(.small)
+                    .disabled(model.isSourceBusy)
+                    .accessibilityIdentifier("cronharbor.history.clear")
                 }
+                .padding(.horizontal, 13)
+                .padding(.vertical, 7)
+                Divider()
+            }
+
+            if model.runHistory.isEmpty {
+                emptyState(
+                    title: "No CronHarbor runs yet",
+                    message: "Scheduled cron executions are not tracked."
+                )
+            } else if visibleRecords.isEmpty {
+                emptyState(
+                    title: "No failed runs",
+                    message: "Every recorded run exited with status 0."
+                )
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(model.runHistory) { record in
+                        ForEach(visibleRecords) { record in
                             CompactRunRow(record: record, showsJobName: true)
                             Divider()
                         }
@@ -40,6 +61,34 @@ struct MenuBarHistoryView: View {
             }
         }
         .accessibilityIdentifier("cronharbor.menu.history")
+        .confirmationDialog(
+            "Clear all Run Now history?",
+            isPresented: $confirmsClear,
+            titleVisibility: .visible
+        ) {
+            Button("Clear History", role: .destructive) {
+                Task { await model.clearRunHistory() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes the recorded output of runs CronHarbor started. Your crontab is not affected.")
+        }
+    }
+
+    private func emptyState(title: String, message: String) -> some View {
+        VStack(spacing: 9) {
+            Spacer()
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 32))
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.headline)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 

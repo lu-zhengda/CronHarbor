@@ -16,12 +16,16 @@ CronHarbor gives classic `cron` a clear Mac interface without replacing it or hi
 - Compact inline job list, detail, editor, staged-change review, and run history
 - Search and filters for active, paused, and attention-needed jobs
 - Friendly presets with exact five-field expressions and supported `@shortcuts`
-- Local next-run estimates, including standard day-of-month/day-of-week cron semantics
+- Rich human-readable schedule descriptions with a verbatim fallback for anything ambiguous
+- Live next-occurrences preview while editing an expression, and the next three runs in job detail
+- Field-specific validation messages that name the failing cron field and reason
 - Reversible pause and resume, including macOS's `@AppleNotOnBattery` qualifier
-- Explicit staging, review, and apply flow
+- Explicit staging, review, and apply flow, plus one-click job duplication
 - Conflict detection, private backups, and exact post-install readback
+- A Settings backups browser to reveal, restore, or prune those backups safely
 - Confirmed **Run Now** with cron-like shell, environment, and `%` preprocessing
-- No analytics, telemetry, account, or network service
+- Run history with a failures-only filter and a confirmed clear action
+- Optional launch at login; no analytics, telemetry, account, or network service
 
 ## Requirements
 
@@ -78,7 +82,7 @@ Backups are stored under:
 ~/Library/Application Support/CronHarbor/Backups/
 ```
 
-The directory is created with mode `0700` and each backup with mode `0600`. Backups are not currently pruned automatically.
+The directory is created with mode `0700` and each backup with mode `0600`. Settings → Backups lists every backup with its date and size, reveals the folder in Finder, restores a chosen backup, or deletes old backups while keeping the newest 20; backups are never pruned automatically. Restoring goes through the same safety pipeline as an apply: the current crontab is re-read, backed up, digest-checked immediately before the write, and read back byte-for-byte afterward.
 
 Read the full [safety model](docs/SAFETY.md) before using CronHarbor with important jobs.
 

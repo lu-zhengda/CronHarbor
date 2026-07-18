@@ -21,6 +21,14 @@ actor RunHistoryStore {
         return loadRecords()
     }
 
+    func clear() throws {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: fileURL.path) else { return }
+        try preparePrivateStorage(using: fileManager)
+        let data = try JSONEncoder().encode([RunRecord]())
+        try writeAtomicallyAndPrivately(data, using: fileManager)
+    }
+
     func append(_ record: RunRecord) throws {
         let fileManager = FileManager.default
         try preparePrivateStorage(using: fileManager)

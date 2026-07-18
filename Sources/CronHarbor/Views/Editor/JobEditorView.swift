@@ -3,6 +3,7 @@ import SwiftUI
 struct JobEditorView: View {
     @Binding private var draft: JobDraft
     @State private var preset: SchedulePreset
+    @State private var upcomingRuns: [Date] = []
 
     let onCancel: () -> Void
     let onSave: (JobDraft) -> Void
@@ -74,6 +75,8 @@ struct JobEditorView: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(CronHarborStyle.accent)
 
+                        upcomingRunsPreview
+
                         Toggle("Run only on AC power", isOn: $draft.requiresACPower)
                             .toggleStyle(.switch)
                             .help("Uses macOS cron's @AppleNotOnBattery qualifier")
@@ -122,6 +125,47 @@ struct JobEditorView: View {
             .padding(12)
         }
         .accessibilityIdentifier("cronharbor.menu.editor")
+        .task(id: draft.expression) {
+            // Debounce so a half-typed expression is not searched for
+            // occurrences on every keystroke.
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            let expression = draft.expression
+            let runs = await Task.detached(priority: .userInitiated) {
+                ScheduleExpression.upcomingRuns(for: expression, count: 3)
+            }.value
+            guard !Task.isCancelled else { return }
+            upcomingRuns = runs
+        }
+    }
+
+    @ViewBuilder
+    private var upcomingRunsPreview: some View {
+        let normalized = draft.expression.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized == "@reboot" {
+            Text("Runs when the cron daemon starts — no calendar occurrences.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if !upcomingRuns.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("NEXT OCCURRENCES")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+                ForEach(upcomingRuns, id: \.self) { run in
+                    HStack(spacing: 6) {
+                        Text(run.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()))
+                            .font(.caption.monospacedDigit())
+                        Text(run.formatted(.relative(presentation: .named)))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            .accessibilityIdentifier("cronharbor.editor.upcoming")
+        }
     }
 
     private func editorSection<Content: View>(

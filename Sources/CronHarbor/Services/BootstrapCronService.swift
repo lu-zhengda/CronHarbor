@@ -20,6 +20,14 @@ actor BootstrapCronService: CronServiceProtocol {
         throw BootstrapError.liveServiceUnavailable
     }
 
+    func clearRunHistory() async throws {
+        // Demo history lives only in the model; nothing to clear on disk.
+    }
+
+    func restoreBackup(from url: URL) async throws -> CronLoadResult {
+        throw BootstrapError.liveServiceUnavailable
+    }
+
     func run(job: JobPresentation) async throws -> RunRecord {
         try await Task.sleep(for: .milliseconds(450))
         return RunRecord(

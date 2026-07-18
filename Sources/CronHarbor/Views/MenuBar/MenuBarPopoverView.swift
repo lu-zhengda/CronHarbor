@@ -26,6 +26,7 @@ struct MenuBarPopoverView: View {
                         job: job,
                         onBack: { page = .jobs },
                         onEdit: { editJob(job) },
+                        onDuplicate: { duplicateJob(job) },
                         onReviewChanges: { page = .changes }
                     )
                 } else {
@@ -108,6 +109,12 @@ struct MenuBarPopoverView: View {
 
     private func editJob(_ job: JobPresentation) {
         model.beginEditing(job)
+        guard model.editorDraft != nil else { return }
+        page = .editor(returnJobID: job.id)
+    }
+
+    private func duplicateJob(_ job: JobPresentation) {
+        model.beginDuplicating(job)
         guard model.editorDraft != nil else { return }
         page = .editor(returnJobID: job.id)
     }

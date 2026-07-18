@@ -6,9 +6,11 @@ struct MenuBarJobDetailView: View {
     let job: JobPresentation
     let onBack: () -> Void
     let onEdit: () -> Void
+    let onDuplicate: () -> Void
     let onReviewChanges: () -> Void
     @State private var confirmsRun = false
     @State private var confirmsDelete = false
+    @State private var upcomingRuns: [Date] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,6 +58,16 @@ struct MenuBarJobDetailView: View {
             }
         }
         .accessibilityIdentifier("cronharbor.menu.job-detail")
+        .task(id: job.expression) {
+            guard job.isEnabled, job.diagnostic == nil else {
+                upcomingRuns = []
+                return
+            }
+            let expression = job.expression
+            upcomingRuns = await Task.detached(priority: .userInitiated) {
+                ScheduleExpression.upcomingRuns(for: expression, count: 3)
+            }.value
+        }
         .confirmationDialog(
             "Run “\(job.name)” now?",
             isPresented: $confirmsRun,
@@ -163,13 +175,18 @@ struct MenuBarJobDetailView: View {
     }
 
     private var nextRunCard: some View {
-        DetailCard(title: "Next run", symbol: "clock") {
-            if let nextRun = job.nextRun, job.isEnabled {
+        DetailCard(title: "Upcoming runs", symbol: "clock") {
+            if let nextRun = upcomingRuns.first ?? job.nextRun, job.isEnabled {
                 Text(nextRun, format: .dateTime.weekday(.wide).month().day().hour().minute())
                     .font(.callout.weight(.semibold))
                 Text(nextRun, style: .relative)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                ForEach(upcomingRuns.dropFirst(), id: \.self) { run in
+                    Text("then \(run.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } else {
                 Text(job.isEnabled ? "Not predictable" : "Paused")
                     .font(.callout.weight(.semibold))
@@ -184,6 +201,13 @@ struct MenuBarJobDetailView: View {
                     .frame(maxWidth: .infinity)
             }
             .disabled(job.diagnostic != nil || model.isSourceBusy)
+
+            Button(action: onDuplicate) {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+                    .frame(maxWidth: .infinity)
+            }
+            .disabled(job.diagnostic != nil || model.isSourceBusy)
+            .help("Stage a copy of this job")
 
             Button {
                 confirmsRun = true

@@ -256,6 +256,82 @@ struct DashboardModelTests {
         #expect(!model.isEditorPresented)
     }
 
+    @Test("Duplicating a job opens a new-job draft with the same schedule")
+    func duplicateOpensDetachedDraft() async {
+        let original = Self.job()
+        let fake = AppFakeCronService(loadResult: Self.result(jobs: [original]))
+        let model = DashboardModel(service: fake)
+        await model.refresh()
+
+        model.beginDuplicating(original)
+
+        #expect(model.editorDraft?.id == nil)
+        #expect(model.editorDraft?.name == "Nightly Backup Copy")
+        #expect(model.editorDraft?.expression == original.expression)
+        #expect(model.editorDraft?.command == original.command)
+        #expect(model.jobs == [original])
+        #expect(model.pendingChanges.isEmpty)
+    }
+
+    @Test("Clearing run history empties the model after the service succeeds")
+    func clearRunHistoryEmptiesModel() async {
+        let original = Self.job()
+        let fake = AppFakeCronService(loadResult: Self.result(jobs: [original]))
+        let model = DashboardModel(service: fake)
+        await model.refresh()
+        await model.runNow(original)
+        #expect(model.runHistory.count == 1)
+
+        await model.clearRunHistory()
+
+        #expect(model.runHistory.isEmpty)
+        #expect(await fake.clearHistoryCallCount() == 1)
+        #expect(model.lastError == nil)
+    }
+
+    @Test("Restore is refused while changes are staged")
+    func restoreRefusedWithPendingChanges() async {
+        let original = Self.job()
+        let fake = AppFakeCronService(loadResult: Self.result(jobs: [original]))
+        let model = DashboardModel(service: fake)
+        await model.refresh()
+        var draft = JobDraft(job: original)
+        draft.name = "Staged"
+        model.stage(draft)
+
+        let backup = CrontabBackupInfo(
+            url: URL(fileURLWithPath: "/tmp/fake.backup"),
+            createdAt: .now,
+            sizeInBytes: 10
+        )
+        await model.restoreBackup(backup)
+
+        #expect(await fake.restoredBackupURLs().isEmpty)
+        #expect(model.lastError == "Apply or discard pending changes before restoring a backup.")
+        #expect(model.pendingChanges.count == 1)
+    }
+
+    @Test("Restore adopts the service result as the installed state")
+    func restoreAdoptsServiceResult() async {
+        let original = Self.job()
+        let restored = Self.job(id: "restored", name: "Restored Job")
+        let fake = AppFakeCronService(loadResult: Self.result(jobs: [original]))
+        let model = DashboardModel(service: fake)
+        await model.refresh()
+        await fake.setRestoreResult(Self.result(jobs: [restored], revision: "r-restored"))
+
+        let backup = CrontabBackupInfo(
+            url: URL(fileURLWithPath: "/tmp/fake.backup"),
+            createdAt: .now,
+            sizeInBytes: 10
+        )
+        await model.restoreBackup(backup)
+
+        #expect(model.jobs == [restored])
+        #expect(model.pendingChanges.isEmpty)
+        #expect(await fake.restoredBackupURLs() == [backup.url])
+    }
+
     @Test("Filters remain deterministic")
     func filtersJobs() async {
         let jobs = [
@@ -392,6 +468,9 @@ private actor AppFakeCronService: CronServiceProtocol {
     private var applyError: (any Error & Sendable)?
     private var applyCalls: [ApplyCall] = []
     private var runCalls: [String] = []
+    private var clearHistoryCalls = 0
+    private var restoreCalls: [URL] = []
+    private var restoreResult: CronLoadResult?
 
     init(loadResult: CronLoadResult) {
         self.loadResult = loadResult
@@ -423,6 +502,27 @@ private actor AppFakeCronService: CronServiceProtocol {
             standardError: ""
         )
     }
+
+    func clearRunHistory() async throws {
+        clearHistoryCalls += 1
+    }
+
+    func restoreBackup(from url: URL) async throws -> CronLoadResult {
+        restoreCalls.append(url)
+        guard let restoreResult else {
+            throw CronServiceCapabilityError.unsupported
+        }
+        loadResult = restoreResult
+        return restoreResult
+    }
+
+    func setRestoreResult(_ result: CronLoadResult) {
+        restoreResult = result
+    }
+
+    func clearHistoryCallCount() -> Int { clearHistoryCalls }
+
+    func restoredBackupURLs() -> [URL] { restoreCalls }
 
     func setApplyResult(_ result: CronLoadResult) {
         applyResult = result
