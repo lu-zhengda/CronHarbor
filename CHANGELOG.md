@@ -4,6 +4,8 @@ All notable changes to CronHarbor are documented here. The project follows [Keep
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-18
+
 ### Added
 
 - Scheduled-start tracking: CronHarbor now observes the cron daemon's `(user) CMD (…)` entries in the unified log — read-only, current user only. Job detail shows the last observed start, and Run History gains a Scheduled tab listing observed starts. Because macOS keeps these Info-level entries only briefly, CronHarbor polls every two minutes while jobs are installed and accumulates what it sees for the session; the UI states plainly that starts prove launch, not completion or exit status.

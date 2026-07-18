@@ -1,5 +1,8 @@
 import Foundation
-import UserNotifications
+// The macOS 14 SDK does not yet mark several UserNotifications types
+// Sendable; @preconcurrency keeps strict-concurrency builds working on both
+// that SDK and newer ones.
+@preconcurrency import UserNotifications
 
 /// Posts local notifications for Run Now completions.
 ///
