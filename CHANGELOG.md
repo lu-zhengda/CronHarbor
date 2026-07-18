@@ -4,6 +4,16 @@ All notable changes to CronHarbor are documented here. The project follows [Keep
 
 ## [Unreleased]
 
+### Added
+
+- Scheduled-start tracking: CronHarbor now observes the cron daemon's `(user) CMD (…)` entries in the unified log — read-only, current user only. Job detail shows the last observed start, and Run History gains a Scheduled tab listing observed starts. Because macOS keeps these Info-level entries only briefly, CronHarbor polls every two minutes while jobs are installed and accumulates what it sees for the session; the UI states plainly that starts prove launch, not completion or exit status.
+- Optional menu bar countdown ("12m", "3h", "Tue") to the next installed run, off by default.
+- Optional local notification when a Run Now finishes, including exit status; off by default, requests authorization on first enable, and never applies to cron's own scheduled runs.
+
+### Tests
+
+- Added daemon log parsing coverage: user filtering, non-CMD exclusion, parentheses in commands, and exact-user matching.
+
 ## [0.3.0] - 2026-07-18
 
 ### Added

@@ -25,6 +25,8 @@ CronHarbor gives classic `cron` a clear Mac interface without replacing it or hi
 - A Settings backups browser to reveal, restore, or prune those backups safely
 - Confirmed **Run Now** with cron-like shell, environment, and `%` preprocessing
 - Run history with a failures-only filter and a confirmed clear action
+- Read-only scheduled-start tracking from the system log, honestly labeled as start-only evidence
+- Optional menu bar countdown to the next run and optional Run Now completion notifications
 - Optional launch at login; no analytics, telemetry, account, or network service
 
 ## Requirements
@@ -92,7 +94,7 @@ Read the full [safety model](docs/SAFETY.md) before using CronHarbor with import
 
 Before execution, CronHarbor re-reads the installed crontab and requires its complete SHA-256 revision—and the selected job's name, schedule, command, enabled state, metadata ownership, and AC restriction—to match what was confirmed. It then builds an immutable invocation from that installed snapshot. This whole-source check also catches changes to preceding environment assignments. CronHarbor defaults to `/bin/sh` and a minimal `PATH` when those values are absent, runs in the account's `HOME`, and implements cron's special unescaped `%` behavior. It does not inherit the app's full environment or copy arbitrary app secrets into the child process.
 
-Run history contains only executions started by CronHarbor—not executions started by the cron daemon. The newest 100 records, including captured standard output and standard error, are stored locally at:
+Run history's **Run Now** tab contains only executions started by CronHarbor. The **Scheduled** tab separately lists starts the cron daemon itself logged for your account, read from the macOS unified log: these prove a job was launched but include no output, completion, or exit status, and macOS retains the underlying log entries only briefly, so CronHarbor polls while running and accumulates the starts it observes for the session. Run Now records — the newest 100, including captured standard output and standard error — are stored locally at:
 
 ```text
 ~/Library/Application Support/CronHarbor/run-history.json

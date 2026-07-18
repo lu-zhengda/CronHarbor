@@ -4,8 +4,14 @@ import SwiftUI
 struct MenuBarHistoryView: View {
     @EnvironmentObject private var model: DashboardModel
     let onBack: () -> Void
+    @State private var source: HistorySource = .runNow
     @State private var showsFailuresOnly = false
     @State private var confirmsClear = false
+
+    private enum HistorySource: Hashable {
+        case runNow
+        case daemon
+    }
 
     private var visibleRecords: [RunRecord] {
         showsFailuresOnly ? model.runHistory.filter { !$0.succeeded } : model.runHistory
@@ -15,52 +21,36 @@ struct MenuBarHistoryView: View {
         VStack(spacing: 0) {
             PanelPageHeader(
                 title: "Run History",
-                subtitle: "Only commands started with Run Now",
+                subtitle: source == .runNow
+                    ? "Commands started with Run Now"
+                    : "Cron daemon starts from the system log",
                 onBack: onBack
             )
             Divider()
 
-            if !model.runHistory.isEmpty {
-                HStack(spacing: 8) {
-                    Toggle("Failures only", isOn: $showsFailuresOnly)
-                        .toggleStyle(.checkbox)
-                        .font(.caption)
-                    Spacer()
-                    Button("Clear History") {
-                        confirmsClear = true
-                    }
-                    .controlSize(.small)
-                    .disabled(model.isSourceBusy)
-                    .accessibilityIdentifier("cronharbor.history.clear")
-                }
-                .padding(.horizontal, 13)
-                .padding(.vertical, 7)
-                Divider()
+            Picker("Source", selection: $source) {
+                Text("Run Now").tag(HistorySource.runNow)
+                Text("Scheduled").tag(HistorySource.daemon)
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 13)
+            .padding(.vertical, 8)
+            Divider()
 
-            if model.runHistory.isEmpty {
-                emptyState(
-                    title: "No CronHarbor runs yet",
-                    message: "Scheduled cron executions are not tracked."
-                )
-            } else if visibleRecords.isEmpty {
-                emptyState(
-                    title: "No failed runs",
-                    message: "Every recorded run exited with status 0."
-                )
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(visibleRecords) { record in
-                            CompactRunRow(record: record, showsJobName: true)
-                            Divider()
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                }
+            switch source {
+            case .runNow:
+                runNowHistory
+            case .daemon:
+                daemonHistory
             }
         }
         .accessibilityIdentifier("cronharbor.menu.history")
+        .task(id: source) {
+            if source == .daemon {
+                await model.reloadDaemonRuns()
+            }
+        }
         .confirmationDialog(
             "Clear all Run Now history?",
             isPresented: $confirmsClear,
@@ -72,6 +62,88 @@ struct MenuBarHistoryView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This deletes the recorded output of runs CronHarbor started. Your crontab is not affected.")
+        }
+    }
+
+    @ViewBuilder
+    private var runNowHistory: some View {
+        if !model.runHistory.isEmpty {
+            HStack(spacing: 8) {
+                Toggle("Failures only", isOn: $showsFailuresOnly)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+                Spacer()
+                Button("Clear History") {
+                    confirmsClear = true
+                }
+                .controlSize(.small)
+                .disabled(model.isSourceBusy)
+                .accessibilityIdentifier("cronharbor.history.clear")
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 7)
+            Divider()
+        }
+
+        if model.runHistory.isEmpty {
+            emptyState(
+                title: "No CronHarbor runs yet",
+                message: "Runs you start with Run Now are recorded here."
+            )
+        } else if visibleRecords.isEmpty {
+            emptyState(
+                title: "No failed runs",
+                message: "Every recorded run exited with status 0."
+            )
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(visibleRecords) { record in
+                        CompactRunRow(record: record, showsJobName: true)
+                        Divider()
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var daemonHistory: some View {
+        if model.isLoadingDaemonRuns, model.daemonRuns.isEmpty {
+            VStack {
+                Spacer()
+                ProgressView("Reading the system log…")
+                    .controlSize(.small)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+        } else if let daemonRunsError = model.daemonRunsError, model.daemonRuns.isEmpty {
+            emptyState(title: "System log unavailable", message: daemonRunsError)
+        } else if model.daemonRuns.isEmpty {
+            emptyState(
+                title: "No scheduled starts observed",
+                message: "macOS keeps cron's log entries only briefly. Starts observed while CronHarbor is running accumulate here."
+            )
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(model.daemonRuns) { event in
+                        DaemonRunRow(
+                            event: event,
+                            jobName: model.jobName(forDaemonCommand: event.command)
+                        )
+                        Divider()
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+            Divider()
+            Text("Starts observed in the system log. macOS cron does not record completion or exit status.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 6)
         }
     }
 
@@ -89,6 +161,29 @@ struct MenuBarHistoryView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+private struct DaemonRunRow: View {
+    let event: DaemonRunEvent
+    let jobName: String?
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "gearshape.arrow.triangle.2.circlepath")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(jobName ?? event.command)
+                    .font(jobName == nil ? .system(.caption, design: .monospaced) : .callout.weight(.medium))
+                    .lineLimit(1)
+                Text("Started \(event.date.formatted(.dateTime.month(.abbreviated).day().hour().minute())) · \(event.date.formatted(.relative(presentation: .named)))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 8)
+        .help(event.command)
     }
 }
 

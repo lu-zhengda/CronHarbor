@@ -17,13 +17,45 @@ final class DashboardModel: ObservableObject {
     @Published var diagnostics: [String] = []
     @Published var editorDraft: JobDraft?
 
+    /// Clock tick that keeps time-derived labels (such as the optional menu
+    /// bar countdown) fresh while the panel is closed.
+    @Published private(set) var now: Date = .now
+
+    @Published var daemonRuns: [DaemonRunEvent] = []
+    @Published var isLoadingDaemonRuns = false
+    @Published var daemonRunsError: String?
+
     private let service: any CronServiceProtocol
+    private let daemonLogService = DaemonRunLogService()
     private var revision = ""
     private var installedJobsSnapshot: [JobPresentation] = []
     private var installedJobsByID: [String: JobPresentation] = [:]
+    private var clockCancellable: AnyCancellable?
+
+    private var lastDaemonPollDate: Date?
 
     init(service: any CronServiceProtocol) {
         self.service = service
+        clockCancellable = Timer.publish(every: 30, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] tick in
+                guard let self else { return }
+                now = tick
+                refreshUpcomingRuns(at: tick)
+                pollDaemonRunsIfDue(at: tick)
+            }
+    }
+
+    /// The log ring buffer holds cron entries only briefly, so starts must be
+    /// collected while they are still visible. Polls stay off entirely for
+    /// accounts with no installed jobs.
+    private func pollDaemonRunsIfDue(at tick: Date) {
+        guard !installedJobsSnapshot.isEmpty else { return }
+        if let lastDaemonPollDate, tick.timeIntervalSince(lastDaemonPollDate) < 120 {
+            return
+        }
+        lastDaemonPollDate = tick
+        Task { await self.reloadDaemonRuns() }
     }
 
     static func makeDefault() -> DashboardModel {
@@ -41,6 +73,19 @@ final class DashboardModel: ObservableObject {
             return "exclamationmark.triangle"
         }
         return runningJobID == nil ? "calendar.badge.clock" : "arrow.triangle.2.circlepath"
+    }
+
+    /// Compact countdown to the next installed run for the optional menu bar
+    /// label, such as "12m", "3h" or "Tue".
+    var menuBarCountdownText: String? {
+        guard let nextRun = upcomingInstalledJobs(after: now).first?.nextRun else {
+            return nil
+        }
+        let interval = nextRun.timeIntervalSince(now)
+        if interval < 60 { return "<1m" }
+        if interval < 3_600 { return "\(Int(interval / 60))m" }
+        if interval < 24 * 3_600 { return "\(Int(interval / 3_600))h" }
+        return nextRun.formatted(.dateTime.weekday(.abbreviated))
     }
 
     var filteredJobs: [JobPresentation] {
@@ -340,9 +385,34 @@ final class DashboardModel: ObservableObject {
             let record = try await service.run(job: job)
             runHistory.insert(record, at: 0)
             lastError = nil
+            if UserDefaults.standard.bool(forKey: "notifyOnRunNowCompletion") {
+                RunNotifier.shared.notify(about: record)
+            }
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    /// Reads recent cron daemon starts from the unified log. Presentation
+    /// only: results prove a start, never completion or success.
+    func reloadDaemonRuns() async {
+        guard !isLoadingDaemonRuns else { return }
+        isLoadingDaemonRuns = true
+        defer { isLoadingDaemonRuns = false }
+        do {
+            daemonRuns = try await daemonLogService.recentRuns()
+            daemonRunsError = nil
+        } catch {
+            daemonRunsError = error.localizedDescription
+        }
+    }
+
+    func lastDaemonRun(for job: JobPresentation) -> DaemonRunEvent? {
+        daemonRuns.first { $0.command == job.command }
+    }
+
+    func jobName(forDaemonCommand command: String) -> String? {
+        installedJobsSnapshot.first { $0.command == command }?.name
     }
 
     func clearRunHistory() async {

@@ -25,6 +25,9 @@ struct SettingsView: View {
 private struct GeneralSettingsTab: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var launchAtLoginError: String?
+    @AppStorage("showsNextRunInMenuBar") private var showsNextRunInMenuBar = false
+    @AppStorage("notifyOnRunNowCompletion") private var notifyOnRunNowCompletion = false
+    @State private var notificationHint: String?
 
     var body: some View {
         Form {
@@ -38,6 +41,37 @@ private struct GeneralSettingsTab: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
+            }
+
+            Section("Menu Bar") {
+                Toggle("Show time until the next run", isOn: $showsNextRunInMenuBar)
+                Text("Adds a compact countdown, such as 12m or 3h, next to the CronHarbor icon.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Notifications") {
+                Toggle("Notify when a Run Now finishes", isOn: $notifyOnRunNowCompletion)
+                    .onChange(of: notifyOnRunNowCompletion) { _, isEnabled in
+                        guard isEnabled else {
+                            notificationHint = nil
+                            return
+                        }
+                        Task {
+                            let granted = await RunNotifier.shared.requestAuthorization()
+                            notificationHint = granted
+                                ? nil
+                                : "macOS notifications are not authorized for CronHarbor. Allow them in System Settings → Notifications."
+                        }
+                    }
+                if let notificationHint {
+                    Text(notificationHint)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                Text("Applies only to runs you start from CronHarbor, never to cron's own scheduled runs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Safety") {

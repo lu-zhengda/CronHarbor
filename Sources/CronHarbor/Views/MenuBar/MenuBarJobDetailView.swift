@@ -30,6 +30,7 @@ struct MenuBarJobDetailView: View {
                     scheduleCard
                     commandCard
                     nextRunCard
+                    daemonRunCard
                     actionRow
 
                     let records = model.runHistory.filter { $0.jobID == job.id }
@@ -68,6 +69,7 @@ struct MenuBarJobDetailView: View {
                 ScheduleExpression.upcomingRuns(for: expression, count: 3)
             }.value
         }
+        .task { await model.reloadDaemonRuns() }
         .confirmationDialog(
             "Run “\(job.name)” now?",
             isPresented: $confirmsRun,
@@ -190,6 +192,36 @@ struct MenuBarJobDetailView: View {
             } else {
                 Text(job.isEnabled ? "Not predictable" : "Paused")
                     .font(.callout.weight(.semibold))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var daemonRunCard: some View {
+        if job.diagnostic == nil {
+            DetailCard(title: "Started by cron", symbol: "gearshape.arrow.triangle.2.circlepath") {
+                if let event = model.lastDaemonRun(for: job) {
+                    Text(event.date.formatted(.dateTime.weekday(.wide).month().day().hour().minute()))
+                        .font(.callout.weight(.semibold))
+                    Text("From the system log · start only, exit status is not recorded")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if model.isLoadingDaemonRuns, model.daemonRuns.isEmpty {
+                    Text("Checking the system log…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else if let daemonRunsError = model.daemonRunsError {
+                    Text(daemonRunsError)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("No recent start observed")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text("macOS keeps cron's log entries only briefly. CronHarbor remembers starts it observes while running.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
